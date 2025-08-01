@@ -1,0 +1,451 @@
+# Ethernet Frames and Spanning Tree Protocol Notes
+
+## Ethernet Frames
+
+An Ethernet frame is the basic unit of data transmission in Ethernet networks. It's a structured packet format that encapsulates data as it travels across the physical network medium.
+
+### Frame Structure
+- **Preamble** (7 bytes): Synchronization pattern
+- **Start Frame Delimiter** (1 byte): Frame beginning marker
+- **Destination MAC Address** (6 bytes): Receiving device address
+- **Source MAC Address** (6 bytes): Sending device address
+- **EtherType/Length** (2 bytes): Protocol type or frame length
+- **Payload/Data** (46-1500 bytes): Actual data
+- **Frame Check Sequence** (4 bytes): CRC for error detection
+
+Total frame size: 64-1518 bytes (excluding preamble)
+
+### Frame Analysis Tools
+
+**Software Tools**
+- Wireshark: Popular free network protocol analyzer
+- tcpdump: Command-line packet analyzer for Unix/Linux
+- Microsoft Network Monitor: Windows-based analyzer
+
+**Hardware Tools**
+- Network TAPs: Physical traffic copying devices
+- Managed switches: Port mirroring/SPAN capabilities
+- Protocol analyzers: Dedicated hardware devices
+
+## Ethernet Error Counters
+
+### Frame Error Types
+- **CRC Errors**: Cyclic Redundancy Check failures from transmission errors
+- **Runts**: Frames smaller than 64 bytes, often from collisions
+- **Giants**: Frames larger than 1518 bytes or configured MTU
+- **Drops**: Frames discarded due to buffer overflow or congestion
+
+### Additional Error Counters
+- **Alignment/Framing Errors**: Invalid frame structure
+- **Collision Counters**: Single, multiple, late, excessive collisions
+- **Input/Output Errors**: General transmission failures
+- **Buffer Overruns/Underruns**: Buffer management issues
+- **Symbol/Encoding Errors**: Physical layer problems
+
+## Transceivers
+
+Transceivers transmit and receive signals, handling physical layer conversion between electrical signals and network medium.
+
+### Functions
+- **Signal Conversion**: Electrical to medium-specific format and back
+- **Medium Interface**: Physical connection to different cable types
+- **Protocol Implementation**: Physical layer protocols (10BASE-T, 100BASE-TX, etc.)
+
+### Types
+- **Copper Transceivers**: Handle twisted pair connections (built into NICs)
+- **Fiber Optic Transceivers**: Convert electrical to light signals (SFP, SFP+, QSFP)
+- **Media Converters**: Convert between different media types
+
+### Locations
+- Built into every NIC, switch port, and router port
+- Pluggable modules (SFP/QSFP) in network equipment
+- Process traffic at ingress and egress of every network interface
+
+## Spanning Tree Protocol (STP)
+
+Network protocol that prevents loops in Ethernet networks with redundant paths while maintaining backup connectivity.
+
+### Problem Solved
+Prevents broadcast storms caused by frames looping infinitely through redundant switch connections.
+
+### How STP Works
+
+**Root Bridge Election**
+- All switches elect one "root bridge"
+- Switch with lowest Bridge ID (priority + MAC) wins
+- Becomes reference point for entire network
+
+**Path Calculation**
+- Each switch calculates shortest path to root bridge
+- Uses path cost based on link speed
+- Faster links have lower costs
+
+**Port States**
+- **Root Port**: Best path toward root bridge (forwarding)
+- **Designated Port**: Best path for network segment (forwarding)
+- **Blocked Port**: Redundant path (blocks traffic)
+
+### Port State Transitions
+Blocking → Listening → Learning → Forwarding (30-50 seconds to converge)
+
+### Modern Variants
+- **RSTP**: Rapid STP with faster convergence (~6 seconds)
+- **MSTP**: Multiple spanning trees for VLAN load balancing
+- **PVST+**: Per-VLAN spanning tree
+
+## Graph Theory Connection
+
+STP is based on Minimum Spanning Tree (MST) algorithms from graph theory, specifically Kruskal's and Prim's algorithms.
+
+### Network as Graph
+- Switches = vertices/nodes
+- Links = edges
+- Link costs = edge weights
+
+### MST Goal
+Connect all switches with minimum total cost, no cycles, maintaining connectivity with lowest cost paths.
+
+## Python Implementation
+
+```python
+import heapq
+from collections import defaultdict, namedtuple
+
+class Switch:
+    def __init__(self, switch_id, priority=32768):
+        self.switch_id = switch_id
+        self.priority = priority
+        self.bridge_id = (priority, switch_id)
+        self.ports = {}
+        self.root_bridge_id = self.bridge_id
+        self.root_path_cost = 0
+        self.root_port = None
+        
+    def __lt__(self, other):
+        return self.bridge_id < other.bridge_id
+
+class Link:
+    def __init__(self, cost):
+        self.cost = cost
+        self.state = "BLOCKING"  # BLOCKING, LISTENING, LEARNING, FORWARDING
+
+class STPNetwork:
+    def __init__(self):
+        self.switches = {}
+        self.links = defaultdict(dict)
+        
+    def add_switch(self, switch_id, priority=32768):
+        self.switches[switch_id] = Switch(switch_id, priority)
+        
+    def add_link(self, switch1_id, switch2_id, cost=1):
+        """Add bidirectional link between switches"""
+        if switch1_id not in self.switches or switch2_id not in self.switches:
+            raise ValueError("Both switches must exist before adding link")
+            
+        # Create link objects for both directions
+        self.links[switch1_id][switch2_id] = Link(cost)
+        self.links[switch2_id][switch1_id] = Link(cost)
+        
+        # Add ports to switches
+        self.switches[switch1_id].ports[switch2_id] = self.links[switch1_id][switch2_id]
+        self.switches[switch2_id].ports[switch1_id] = self.links[switch2_id][switch1_id]
+    
+    def elect_root_bridge(self):
+        """Find switch with lowest bridge ID"""
+        return min(self.switches.values())
+    
+    def calculate_spanning_tree(self):
+        """Implement STP using modified Prim's algorithm"""
+        if not self.switches:
+            return
+            
+        # Step 1: Elect root bridge
+        root_bridge = self.elect_root_bridge()
+        print(f"Root Bridge: Switch {root_bridge.switch_id}")
+        
+        # Step 2: Initialize all switches
+        for switch in self.switches.values():
+            switch.root_bridge_id = root_bridge.bridge_id
+            if switch == root_bridge:
+                switch.root_path_cost = 0
+                switch.root_port = None
+            else:
+                switch.root_path_cost = float('inf')
+                switch.root_port = None
+        
+        # Step 3: Calculate shortest paths to root (Dijkstra-like)
+        visited = set()
+        pq = [(0, root_bridge.switch_id, None)]  # (cost, switch_id, parent_switch)
+        
+        while pq:
+            current_cost, current_switch_id, parent_switch_id = heapq.heappop(pq)
+            
+            if current_switch_id in visited:
+                continue
+                
+            visited.add(current_switch_id)
+            current_switch = self.switches[current_switch_id]
+            
+            # Update root path cost and root port
+            if current_cost < current_switch.root_path_cost:
+                current_switch.root_path_cost = current_cost
+                current_switch.root_port = parent_switch_id
+            
+            # Explore neighbors
+            for neighbor_id, link in current_switch.ports.items():
+                if neighbor_id not in visited:
+                    new_cost = current_cost + link.cost
+                    heapq.heappush(pq, (new_cost, neighbor_id, current_switch_id))
+        
+        # Step 4: Determine port roles and states
+        self._assign_port_roles()
+        
+    def _assign_port_roles(self):
+        """Assign port roles: Root, Designated, or Blocked"""
+        # Reset all ports to blocking
+        for switch_id, switch in self.switches.items():
+            for neighbor_id, link in switch.ports.items():
+                link.state = "BLOCKING"
+        
+        # Set root ports to forwarding
+        for switch in self.switches.values():
+            if switch.root_port is not None:
+                switch.ports[switch.root_port].state = "FORWARDING"
+                print(f"Switch {switch.switch_id}: Root port to {switch.root_port} (FORWARDING)")
+        
+        # Determine designated ports
+        for switch1_id in self.switches:
+            for switch2_id in self.links[switch1_id]:
+                switch1 = self.switches[switch1_id]
+                switch2 = self.switches[switch2_id]
+                
+                # Skip if this is a root port connection (already handled)
+                if (switch1.root_port == switch2_id or switch2.root_port == switch1_id):
+                    continue
+                
+                # Determine which switch should be designated for this link
+                if (switch1.root_path_cost < switch2.root_path_cost or 
+                    (switch1.root_path_cost == switch2.root_path_cost and 
+                     switch1.bridge_id < switch2.bridge_id)):
+                    # Switch1 is designated
+                    switch1.ports[switch2_id].state = "FORWARDING"
+                    switch2.ports[switch1_id].state = "BLOCKING"
+                    print(f"Switch {switch1_id} to {switch2_id}: DESIGNATED (FORWARDING)")
+                    print(f"Switch {switch2_id} to {switch1_id}: BLOCKED")
+    
+    def print_topology(self):
+        """Print current spanning tree topology"""
+        print("\n=== Spanning Tree Topology ===")
+        root = self.elect_root_bridge()
+        print(f"Root Bridge: Switch {root.switch_id} (Priority: {root.priority})")
+        
+        print("\nSwitch Information:")
+        for switch in sorted(self.switches.values(), key=lambda s: s.switch_id):
+            print(f"Switch {switch.switch_id}:")
+            print(f"  Root Path Cost: {switch.root_path_cost}")
+            print(f"  Root Port: {switch.root_port}")
+            
+            for neighbor_id, link in switch.ports.items():
+                print(f"  Port to Switch {neighbor_id}: {link.state} (Cost: {link.cost})")
+        
+        print("\nActive (Forwarding) Links:")
+        printed_links = set()
+        for switch_id, switch in self.switches.items():
+            for neighbor_id, link in switch.ports.items():
+                link_key = tuple(sorted([switch_id, neighbor_id]))
+                if link.state == "FORWARDING" and link_key not in printed_links:
+                    print(f"  Switch {switch_id} <-> Switch {neighbor_id}")
+                    printed_links.add(link_key)
+
+# Example usage and testing
+def example_network():
+    """Create example network with redundant paths"""
+    stp = STPNetwork()
+    
+    # Add switches
+    stp.add_switch('A', priority=4096)   # Lower priority = root bridge
+    stp.add_switch('B', priority=32768)
+    stp.add_switch('C', priority=32768)
+    stp.add_switch('D', priority=32768)
+    
+    # Add links (creating redundant paths)
+    stp.add_link('A', 'B', cost=4)
+    stp.add_link('A', 'C', cost=10)
+    stp.add_link('B', 'C', cost=2)
+    stp.add_link('B', 'D', cost=3)
+    stp.add_link('C', 'D', cost=1)
+    
+    print("Network before STP:")
+    print("Links: A-B(4), A-C(10), B-C(2), B-D(3), C-D(1)")
+    
+    # Calculate spanning tree
+    stp.calculate_spanning_tree()
+    stp.print_topology()
+    
+    return stp
+
+if __name__ == "__main__":
+    example_network()
+```
+
+This implementation demonstrates the core STP concepts:
+- Root bridge election based on lowest Bridge ID
+- Shortest path calculation to root using modified Dijkstra's algorithm
+- Port role assignment (Root, Designated, Blocked)
+- Loop prevention while maintaining network connectivity
+
+## Client Disassociation Attack
+
+A client disassociation attack (also called deauthentication attack) is a denial-of-service attack that targets Wi-Fi networks by forcibly disconnecting devices from wireless access points.
+
+### How It Works
+
+The attack exploits IEEE 802.11 management frames that are sent unencrypted and unauthenticated in original wireless standards. Attackers send forged deauthentication frames to wireless access points or client devices, causing disconnection from the network.
+
+### Attack Process
+1. **Network Reconnaissance**: Use network sniffing tools to identify target router and connected devices, obtaining MAC addresses and security protocols
+2. **Frame Injection**: Send forged deauthentication frames to target device, which assumes they're legitimate and disconnects
+3. **Persistent Disruption**: Continue sending frames to prevent reconnection
+
+### Attack Requirements
+- Target device's MAC address (obtainable through wireless network sniffing)
+- Proximity to target network
+- Tools like aireplay-ng or custom scripts
+
+### Attack Purposes
+- **Evil Twin Attacks**: Force clients to connect to malicious access point for traffic interception
+- **Password Cracking**: Exploit reauthentication process for brute-force attacks
+- **Simple Disruption**: Deny network access
+
+### Defense Mechanisms
+
+**IEEE 802.11w (Management Frame Protection)**
+- Provides authentication for Wi-Fi management frames
+- When enabled, forged frames fail authentication and are ignored
+- Limited adoption in hardware and software implementations
+
+**Additional Protections**
+- Wireless Intrusion Detection/Prevention Systems (WIDS/WIPS)
+- Regular firmware updates on access points and clients
+- Wired connections for critical systems when possible
+
+### Attack Limitations
+- Cannot protect against radio jamming attacks
+- Other layer 2 attacks can bypass 802.11w protections
+- Hardware/software support for protections remains limited
+
+## CDP vs LLDP
+
+### CDP (Cisco Discovery Protocol)
+**Proprietary Protocol**
+- Cisco-specific, only works between Cisco devices
+- Enabled by default on Cisco equipment
+- Uses multicast address 01:00:0c:cc:cc:cc
+- 60-second timer, 180-second hold time
+
+**Information Shared**
+- Device ID, local/remote ports, platform, capabilities
+- Software version, native VLAN, power consumption
+- Management IP address
+
+### LLDP (Link Layer Discovery Protocol)
+**Open Standard**
+- IEEE 802.1AB standard, vendor-neutral
+- Not enabled by default on most devices
+- Uses multicast address 01:80:c2:00:00:0e
+- 30-second timer, 120-second hold time
+
+**Information Shared**
+- System name/description, port ID/description
+- System capabilities, management address
+- Power requirements, VLAN information, network policies
+
+### Key Differences
+- **Compatibility**: CDP (Cisco only) vs LLDP (multi-vendor)
+- **Default State**: CDP enabled vs LLDP usually disabled
+- **Use Cases**: CDP for pure Cisco environments, LLDP for mixed vendors
+
+## 802.11 Wireless Standard
+
+802.11 is the IEEE standard defining wireless local area network (WLAN) communication protocols for 2.4 GHz, 5 GHz, and 6 GHz frequency bands.
+
+### Key Standards Evolution
+- **802.11 (1997)**: 2 Mbps, 2.4 GHz
+- **802.11b (1999)**: 11 Mbps, 2.4 GHz
+- **802.11a (1999)**: 54 Mbps, 5 GHz, OFDM
+- **802.11g (2003)**: 54 Mbps, 2.4 GHz, OFDM
+- **802.11n (2009)**: 600 Mbps, MIMO, 40 MHz channels
+- **802.11ac (2013)**: 6.93 Gbps, 5 GHz, MU-MIMO
+- **802.11ax/Wi-Fi 6 (2019)**: 9.6 Gbps, OFDMA
+- **802.11be/Wi-Fi 7 (2024)**: 46 Gbps, 320 MHz channels
+
+### Core Technologies
+- **CSMA/CA**: Listen before transmit, collision avoidance
+- **MIMO**: Multiple antennas for improved throughput
+- **OFDM/OFDMA**: Frequency division multiplexing
+
+### Security Evolution
+- **WEP**: Original, easily broken (deprecated)
+- **WPA**: TKIP encryption, PSK authentication
+- **WPA2**: AES-CCMP encryption, enterprise authentication
+- **WPA3**: SAE authentication, enhanced security
+
+Wi-Fi is simply the trademarked brand name for 802.11-based wireless networking - it doesn't stand for "Wireless Fidelity."
+
+## Linux User Management Commands
+
+### Adding Users
+```bash
+sudo adduser username          # Interactive user creation (Debian/Ubuntu)
+sudo useradd username          # Basic user creation (most distributions)
+sudo useradd -m username       # Create user with home directory
+sudo useradd -m -s /bin/bash username  # Create user with home dir and bash shell
+```
+
+### User Information
+```bash
+id username                    # Show user ID and group memberships
+whoami                        # Show current username
+who                           # Show logged-in users
+w                             # Show logged-in users and activity
+```
+
+### Password Management
+```bash
+sudo passwd username          # Set/change user password
+passwd                        # Change your own password
+sudo chage -l username        # View password aging info
+sudo chage -E YYYY-MM-DD username  # Set account expiration date
+```
+
+### Group Management
+```bash
+sudo groupadd groupname       # Create new group
+sudo usermod -a -G groupname username  # Add user to group
+sudo usermod -G group1,group2 username # Set user's groups
+groups username               # Show user's groups
+```
+
+### User Modification
+```bash
+sudo usermod -l newname oldname    # Change username
+sudo usermod -d /new/home username # Change home directory
+sudo usermod -s /bin/zsh username  # Change default shell
+sudo usermod -L username          # Lock user account
+sudo usermod -U username          # Unlock user account
+```
+
+### Removing Users
+```bash
+sudo deluser username         # Remove user (Debian/Ubuntu)
+sudo userdel username         # Remove user (most distributions)  
+sudo userdel -r username      # Remove user and home directory
+```
+
+### Switching Users
+```bash
+su username                   # Switch to another user
+su -                         # Switch to root with root's environment
+sudo su -                    # Switch to root using sudo
+sudo -u username command     # Run command as another user
+```
